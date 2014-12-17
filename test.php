@@ -13,15 +13,17 @@
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 $isHHVM = (false !== strpos(phpversion(), 'hhvm'));
-$opt = getopt('v', ['verbose', 'deployed', 'coverage', 'testNumber:', 'stop']);
-$isCoverage = isset($opt['coverage']);
+$shortTagEnabled = ini_get('short_open_tag');
+$opt = getopt('v', ['verbose', 'deployed', 'coverage', 'coveralls', 'testNumber:', 'stop']);
+$isCoverage = isset($opt['coverage']) || isset($opt['coveralls']);
+$isCoveralls = isset($opt['coveralls']);
 if ($isCoverage) {
 	require 'vendor/autoload.php';
 	$filter = new PHP_CodeCoverage_Filter();
 	$filter->addFileToBlacklist("fmt.php");
 	$filter->addFileToBlacklist("fmt.src.php");
-	$filter->addFileToBlacklist("FormatterPass.php");
 	$filter->addFileToBlacklist("test.php");
+	$filter->addDirectoryToBlacklist("vendor");
 	$coverage = new PHP_CodeCoverage(null, $filter);
 }
 
@@ -60,6 +62,9 @@ foreach ($cases as $caseIn) {
 				echo 'S';
 				continue 2;
 			}
+		} elseif (!$shortTagEnabled && (T_INLINE_HTML == $id) && false !== strpos($text, '//skipShortTag')) {
+			echo 'S';
+			continue 2;
 		} elseif (T_COMMENT == $id && '//version:' == substr($text, 0, 10)) {
 			$version = str_replace('//version:', '', $text);
 			if (version_compare(PHP_VERSION, $version, '<')) {
@@ -89,13 +94,13 @@ foreach ($cases as $caseIn) {
 						$fmt->addPass(new MergeCurlyCloseAndDoWhile());
 						$fmt->addPass(new MergeDoubleArrowAndArray());
 						$fmt->addPass(new ResizeSpaces());
-						$fmt->addPass(new Reindent());
 						$fmt->addPass(new ReindentColonBlocks());
 						$fmt->addPass(new ReindentLoopColonBlocks());
 						$fmt->addPass(new ReindentIfColonBlocks());
 						$fmt->addPass(new AlignEquals());
 						$fmt->addPass(new AlignDoubleArrow());
 						$fmt->addPass(new ReindentObjOps());
+						$fmt->addPass(new Reindent());
 						$fmt->addPass(new EliminateDuplicatedEmptyLines());
 						$fmt->addPass(new LeftAlignComment());
 						$fmt->addPass(new RTrim());
@@ -118,13 +123,13 @@ foreach ($cases as $caseIn) {
 		$fmt->addPass(new MergeCurlyCloseAndDoWhile());
 		$fmt->addPass(new MergeDoubleArrowAndArray());
 		$fmt->addPass(new ResizeSpaces());
-		$fmt->addPass(new Reindent());
 		$fmt->addPass(new ReindentColonBlocks());
 		$fmt->addPass(new ReindentLoopColonBlocks());
 		$fmt->addPass(new ReindentIfColonBlocks());
 		$fmt->addPass(new AlignEquals());
 		$fmt->addPass(new AlignDoubleArrow());
 		$fmt->addPass(new ReindentObjOps());
+		$fmt->addPass(new Reindent());
 		$fmt->addPass(new EliminateDuplicatedEmptyLines());
 		$fmt->addPass(new LeftAlignComment());
 		$fmt->addPass(new RTrim());
@@ -166,6 +171,9 @@ if (!$bailOut) {
 					echo 'S';
 					continue 2;
 				}
+			} elseif (!$shortTagEnabled && (T_INLINE_HTML == $id) && false !== strpos($text, '//skipShortTag')) {
+				echo 'S';
+				continue 2;
 			} elseif (T_COMMENT == $id && '//passes:' == substr($text, 0, 9)) {
 				$passes = explode(',', str_replace('//passes:', '', $text));
 				$specialPasses = true;
@@ -187,13 +195,13 @@ if (!$bailOut) {
 			$fmt->addPass(new MergeCurlyCloseAndDoWhile());
 			$fmt->addPass(new MergeDoubleArrowAndArray());
 			$fmt->addPass(new ResizeSpaces());
-			$fmt->addPass(new Reindent());
 			$fmt->addPass(new ReindentColonBlocks());
 			$fmt->addPass(new ReindentLoopColonBlocks());
 			$fmt->addPass(new ReindentIfColonBlocks());
 			$fmt->addPass(new AlignEquals());
 			$fmt->addPass(new AlignDoubleArrow());
 			$fmt->addPass(new ReindentObjOps());
+			$fmt->addPass(new Reindent());
 			$fmt->addPass(new EliminateDuplicatedEmptyLines());
 			PsrDecorator::decorate($fmt);
 			$fmt->addPass(new PSR2AlignObjOp());
@@ -231,9 +239,13 @@ if (isset($opt['v']) || isset($opt['verbose'])) {
 	}
 }
 echo "Took ", (microtime(true) - $start), PHP_EOL;
-if ($isCoverage) {
-	$writer = new PHP_CodeCoverage_Report_HTML;
-	$isCoverage && $writer->process($coverage, './cover/');
+if ($isCoverage && !$isCoveralls) {
+	$writer = new PHP_CodeCoverage_Report_HTML();
+	$writer->process($coverage, './cover/');
+}
+if ($isCoveralls) {
+	$writer = new PHP_CodeCoverage_Report_Clover();
+	$writer->process($coverage, './clover.xml');
 }
 
 if (sizeof($brokenTests) > 0) {

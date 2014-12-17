@@ -81,7 +81,9 @@ abstract class FormatterPass {
 		return $direction . "\x2" . implode('', $ignore_list) . "\x2" . (is_array($token) ? implode("\x2", $token) : $token);
 	}
 
+	abstract public function candidate($source, $found_tokens);
 	abstract public function format($source);
+
 	protected function get_token($token) {
 		if (isset($token[1])) {
 			return $token;
@@ -142,13 +144,17 @@ abstract class FormatterPass {
 	}
 
 	protected function left_token($ignore_list = [], $idx = false) {
+		$i = $this->left_token_idx($ignore_list);
+
+		return $this->tkns[$i];
+	}
+
+	protected function left_token_idx($ignore_list = []) {
 		$ignore_list = $this->resolve_ignore_list($ignore_list);
 
 		$i = $this->walk_left($this->tkns, $this->ptr, $ignore_list);
-		if ($idx) {
-			return $i;
-		}
-		return $this->tkns[$i];
+
+		return $i;
 	}
 
 	protected function left_token_is($token, $ignore_list = []) {
@@ -163,8 +169,12 @@ abstract class FormatterPass {
 		return $this->resolve_token_match($tkns, $idx, $token);
 	}
 
-	protected function left_useful_token($idx = false) {
-		return $this->left_token($this->ignore_futile_tokens, $idx);
+	protected function left_useful_token() {
+		return $this->left_token($this->ignore_futile_tokens);
+	}
+
+	protected function left_useful_token_idx() {
+		return $this->left_token_idx($this->ignore_futile_tokens);
 	}
 
 	protected function left_useful_token_is($token) {
@@ -207,6 +217,32 @@ abstract class FormatterPass {
 		}
 	}
 
+	protected function print_curly_block() {
+		$count = 1;
+		while (list($index, $token) = each($this->tkns)) {
+			list($id, $text) = $this->get_token($token);
+			$this->ptr = $index;
+			$this->cache = [];
+			$this->append_code($text);
+
+			if (ST_CURLY_OPEN == $id) {
+				++$count;
+			}
+			if (T_CURLY_OPEN == $id) {
+				++$count;
+			}
+			if (T_DOLLAR_OPEN_CURLY_BRACES == $id) {
+				++$count;
+			}
+			if (ST_CURLY_CLOSE == $id) {
+				--$count;
+			}
+			if (0 == $count) {
+				break;
+			}
+		}
+	}
+
 	protected function print_until($tknid) {
 		while (list($index, $token) = each($this->tkns)) {
 			list($id, $text) = $this->get_token($token);
@@ -219,6 +255,27 @@ abstract class FormatterPass {
 		}
 	}
 
+	protected function print_until_any($tknids) {
+		$tknids = array_flip($tknids);
+		$whitespace_new_line = false;
+		if (isset($tknids[$this->new_line])) {
+			$whitespace_new_line = true;
+		}
+		while (list($index, $token) = each($this->tkns)) {
+			list($id, $text) = $this->get_token($token);
+			$this->ptr = $index;
+			$this->cache = [];
+			$this->append_code($text);
+			if ($whitespace_new_line && T_WHITESPACE == $id && $this->has_ln($text)) {
+				break;
+			}
+			if (isset($tknids[$id])) {
+				break;
+			}
+		}
+		return $id;
+	}
+
 	protected function print_until_the_end_of_string() {
 		$this->print_until(ST_QUOTE);
 	}
@@ -227,10 +284,25 @@ abstract class FormatterPass {
 		if (null == $tkns) {
 			$tkns = $this->tkns;
 		}
-		return implode('', array_map(function ($token) {
+
+		$tkns = array_filter($tkns);
+		$str = '';
+		foreach ($tkns as $token) {
 			list($id, $text) = $this->get_token($token);
-			return $text;
-		}, array_filter($tkns)));
+			$str .= $text;
+		}
+		return $str;
+	}
+
+	protected function render_light($tkns = null) {
+		if (null == $tkns) {
+			$tkns = $this->tkns;
+		}
+		$str = '';
+		foreach ($tkns as $token) {
+			$str .= $token[1];
+		}
+		return $str;
 	}
 
 	private function resolve_ignore_list($ignore_list = []) {
@@ -261,14 +333,18 @@ abstract class FormatterPass {
 		return false;
 	}
 
-	protected function right_token($ignore_list = [], $idx = false) {
+	protected function right_token($ignore_list = []) {
+		$i = $this->right_token_idx($ignore_list);
+
+		return $this->tkns[$i];
+	}
+
+	protected function right_token_idx($ignore_list = []) {
 		$ignore_list = $this->resolve_ignore_list($ignore_list);
 
 		$i = $this->walk_right($this->tkns, $this->ptr, $ignore_list);
-		if ($idx) {
-			return $i;
-		}
-		return $this->tkns[$i];
+
+		return $i;
 	}
 
 	protected function right_token_is($token, $ignore_list = []) {
@@ -283,9 +359,13 @@ abstract class FormatterPass {
 		return $this->resolve_token_match($tkns, $idx, $token);
 	}
 
-	protected function right_useful_token($idx = false) {
-		return $this->right_token($this->ignore_futile_tokens, $idx);
+	protected function right_useful_token() {
+		return $this->right_token($this->ignore_futile_tokens);
 	}
+
+	// protected function right_useful_token_idx($idx = false) {
+	// 	return $this->right_token_idx($this->ignore_futile_tokens);
+	// }
 
 	protected function right_useful_token_is($token) {
 		return $this->right_token_is($token, $this->ignore_futile_tokens);
@@ -295,12 +375,17 @@ abstract class FormatterPass {
 		$this->code = rtrim($this->code) . $code;
 	}
 
-	protected function scan_and_replace(&$tkns, &$ptr, $start, $end, $call) {
+	protected function scan_and_replace(&$tkns, &$ptr, $start, $end, $call, $look_for) {
+		$look_for = array_flip($look_for);
 		$placeholder = '<?php' . ' /*\x2 PHPOPEN \x3*/';
-		$tmp = $placeholder;
+		$tmp = '';
 		$tkn_count = 1;
+		$found_potential_tokens = false;
 		while (list($ptr, $token) = each($tkns)) {
 			list($id, $text) = $this->get_token($token);
+			if (isset($look_for[$id])) {
+				$found_potential_tokens = true;
+			}
 			if ($start == $id) {
 				++$tkn_count;
 			}
@@ -313,7 +398,11 @@ abstract class FormatterPass {
 			}
 			$tmp .= $text;
 		}
-		return $start . str_replace($placeholder, '', $this->{$call}($tmp)) . $end;
+		if ($found_potential_tokens) {
+			return $start . str_replace($placeholder, '', $this->{$call}($placeholder . $tmp)) . $end;
+		}
+		return $start . $tmp . $end;
+
 	}
 
 	protected function set_indent($increment) {
@@ -360,9 +449,10 @@ abstract class FormatterPass {
 			$this->ptr = $index;
 			$ret .= $text;
 			if ($tknid == $id) {
-				return $ret;
+				break;
 			}
 		}
+		return $ret;
 	}
 
 	private function walk_left($tkns, $idx, $ignore_list) {
@@ -420,7 +510,9 @@ final class RefactorPass extends FormatterPass {
 	private function getTo() {
 		return $this->to;
 	}
-
+	public function candidate($source, $found_tokens) {
+		return true;
+	}
 	public function format($source) {
 		$from = $this->getFrom();
 		$from_size = sizeof($from);
